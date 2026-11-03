@@ -176,7 +176,7 @@ public final class VirtualHandMod implements ClientModInitializer {
                 return;
             }
 
-            String name = stack.getHoverName().getString();
+            String name = stack.getHoverName().getString().replaceFirst(" Log$", "");
 
             if (isItemA) {
                 // Keep the current target in sync if it pointed at the old name.
