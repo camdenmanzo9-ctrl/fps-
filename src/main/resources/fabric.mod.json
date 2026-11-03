@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "virtualhand",
+  "version": "${version}",
+  "name": "Virtual Hand",
+  "description": "Client-side virtual hand tracker driven by levers next to a linked block.",
+  "authors": [],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.example.virtualhand.VirtualHandMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~26.1.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
