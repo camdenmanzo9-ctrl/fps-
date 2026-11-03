@@ -38,12 +38,11 @@ public final class VirtualHandMod implements ClientModInitializer {
     }
 
     public static final class VirtualHandManager {
-        // Private, but accessible to the other classes nested in VirtualHandMod.
         private static final List<String> activeHand = new ArrayList<>();
 
-        public static String itemAName = "Alpha";
-        public static String itemBName = "Beta";
-        public static String stringTarget = "Alpha";
+        public static String itemAName = "Diamond Chestplate";
+        public static String itemBName = "Diamond Helmet";
+        public static String stringTarget = "Diamond Chestplate";
         public static BlockPos linkedPos = null;
 
         private static final int HUD_X = 20;
@@ -74,7 +73,7 @@ public final class VirtualHandMod implements ClientModInitializer {
                     activeHand.clear();
                 }
                 while (configKey.consumeClick()) {
-                    client.setScreen(new ConfigScreen());
+                    client.setScreen(new MatrixHubScreen());
                 }
             });
 
@@ -118,43 +117,47 @@ public final class VirtualHandMod implements ClientModInitializer {
         }
     }
 
-    public static final class ConfigScreen extends Screen {
-        private static final int BUTTON_WIDTH = 200;
+    public static final class MatrixHubScreen extends Screen {
+        private static final int MAX_BUTTON_WIDTH = 200;
+        private static final int SCREEN_MARGIN = 20;
         private static final int BUTTON_HEIGHT = 20;
         private static final int BUTTON_SPACING = 24;
         private static final int WHITE = 0xFFFFFFFF;
+        private static final int GOLD = 0xFFFFAA00;
 
         private String statusMessage = "";
 
-        public ConfigScreen() {
-            super(Component.literal("Virtual Hand Config"));
+        public MatrixHubScreen() {
+            super(Component.literal("=== 50-50 MATRIX HUB ==="));
         }
 
         @Override
         protected void init() {
-            int x = (this.width - BUTTON_WIDTH) / 2;
-            int y = this.height / 2 - 30;
+            // Recalculated by Minecraft whenever the window or GUI scale changes.
+            int buttonWidth = Math.min(MAX_BUTTON_WIDTH, this.width - SCREEN_MARGIN * 2);
+            int x = (this.width - buttonWidth) / 2;
+            int y = (this.height - (BUTTON_SPACING * 2 + BUTTON_HEIGHT)) / 2;
 
             this.addRenderableWidget(Button.builder(
-                            Component.literal("Link Target Block"),
-                            button -> linkTargetBlock())
-                    .bounds(x, y, BUTTON_WIDTH, BUTTON_HEIGHT)
+                            Component.literal("Link Machine Block"),
+                            button -> linkMachineBlock())
+                    .bounds(x, y, buttonWidth, BUTTON_HEIGHT)
                     .build());
 
             this.addRenderableWidget(Button.builder(
-                            Component.literal("Set Item A From Hand"),
-                            button -> setItemFromHand(true))
-                    .bounds(x, y + BUTTON_SPACING, BUTTON_WIDTH, BUTTON_HEIGHT)
+                            Component.literal("Import Item A From Hand"),
+                            button -> importItemFromHand(true))
+                    .bounds(x, y + BUTTON_SPACING, buttonWidth, BUTTON_HEIGHT)
                     .build());
 
             this.addRenderableWidget(Button.builder(
-                            Component.literal("Set Item B From Hand"),
-                            button -> setItemFromHand(false))
-                    .bounds(x, y + BUTTON_SPACING * 2, BUTTON_WIDTH, BUTTON_HEIGHT)
+                            Component.literal("Import Item B From Hand"),
+                            button -> importItemFromHand(false))
+                    .bounds(x, y + BUTTON_SPACING * 2, buttonWidth, BUTTON_HEIGHT)
                     .build());
         }
 
-        private void linkTargetBlock() {
+        private void linkMachineBlock() {
             HitResult hitResult = this.minecraft.hitResult;
 
             if (hitResult instanceof BlockHitResult blockHit && hitResult.getType() == HitResult.Type.BLOCK) {
@@ -165,7 +168,7 @@ public final class VirtualHandMod implements ClientModInitializer {
             }
         }
 
-        private void setItemFromHand(boolean isItemA) {
+        private void importItemFromHand(boolean isItemA) {
             if (this.minecraft.player == null) {
                 return;
             }
@@ -199,10 +202,11 @@ public final class VirtualHandMod implements ClientModInitializer {
             super.extractRenderState(graphics, mouseX, mouseY, delta);
 
             String titleText = this.title.getString();
-            graphics.text(this.font, titleText, centeredX(titleText), this.height / 2 - 55, WHITE, true);
+            graphics.text(this.font, titleText, centeredX(titleText), SCREEN_MARGIN, GOLD, true);
 
             if (!statusMessage.isEmpty()) {
-                graphics.text(this.font, statusMessage, centeredX(statusMessage), this.height / 2 + 50, WHITE, true);
+                int statusY = (this.height + BUTTON_SPACING * 2 + BUTTON_HEIGHT) / 2 + 10;
+                graphics.text(this.font, statusMessage, centeredX(statusMessage), statusY, WHITE, true);
             }
         }
 
@@ -217,10 +221,23 @@ public final class VirtualHandMod implements ClientModInitializer {
     }
 
     public static final class MechanicalInterfaceDetector {
+        // Long enough to cover normal server lag, short enough to recover from a rejected click.
+        private static final long PENDING_TIMEOUT_MS = 1000L;
+
+        private static boolean waitingForRelease = false;
+        private static BlockPos pendingLever = null;
+        private static long pendingSinceMs = 0L;
+
         private MechanicalInterfaceDetector() {
         }
 
         private static void register() {
+            ClientTickEvents.END_CLIENT_TICK.register(client -> {
+                if (!client.options.keyUse.isDown()) {
+                    waitingForRelease = false;
+                }
+            });
+
             UseBlockCallback.EVENT.register((player, level, hand, hitResult) -> {
                 // Ignores the integrated server's copy of this event in singleplayer.
                 if (player != Minecraft.getInstance().player || hand != InteractionHand.MAIN_HAND) {
@@ -234,19 +251,36 @@ public final class VirtualHandMod implements ClientModInitializer {
                 }
 
                 BlockPos linkedPos = VirtualHandManager.linkedPos;
-                if (linkedPos == null) {
-                    return InteractionResult.PASS;
-                }
-
                 BlockPos clickedPos = hitResult.getBlockPos();
                 BlockState state = level.getBlockState(clickedPos);
 
-                // This event fires before the toggle, so an unpowered lever is turning ON.
-                if (state.getBlock() instanceof LeverBlock
-                        && !state.getValue(BlockStateProperties.POWERED)
-                        && clickedPos.distManhattan(linkedPos) == 1) {
-                    VirtualHandManager.activeHand.add(VirtualHandManager.stringTarget);
+                if (linkedPos == null
+                        || !(state.getBlock() instanceof LeverBlock)
+                        || clickedPos.distManhattan(linkedPos) != 1) {
+                    return InteractionResult.PASS;
                 }
+
+                // A click on a powered lever turns it off, so the next ON click is a new flick.
+                if (state.getValue(BlockStateProperties.POWERED)) {
+                    if (clickedPos.equals(pendingLever)) {
+                        pendingLever = null;
+                    }
+                    return InteractionResult.PASS;
+                }
+
+                long now = System.currentTimeMillis();
+                boolean awaitingServerUpdate = clickedPos.equals(pendingLever)
+                        && now - pendingSinceMs < PENDING_TIMEOUT_MS;
+
+                // Holding right-click repeats this event, so one press can count only once.
+                if (waitingForRelease || awaitingServerUpdate) {
+                    return InteractionResult.PASS;
+                }
+
+                VirtualHandManager.activeHand.add(VirtualHandManager.stringTarget);
+                waitingForRelease = true;
+                pendingLever = clickedPos.immutable();
+                pendingSinceMs = now;
 
                 return InteractionResult.PASS;
             });
